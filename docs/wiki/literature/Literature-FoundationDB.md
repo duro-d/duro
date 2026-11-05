@@ -2,7 +2,7 @@
 
 Раздел: [Научная литература](Literature.md).
 
-**Работа:** Zhou J., Xu M., Shraer A. и др. FoundationDB: A Distributed Unbundled Transactional Key Value Store. SIGMOD 2021, с. 2653–2666. [DOI: 10.1145/3448016.3457559](https://doi.org/10.1145/3448016.3457559) [[1]](#source-1).
+**Работа:** Zhou J., Xu M., Shraer A. и др. FoundationDB: A Distributed Unbundled Transactional Key Value Store. SIGMOD 2021, с. 2653–2666. [DOI: 10.1145/3448016.3457559](https://doi.org/10.1145/3448016.3457559), [текст статьи](https://www.foundationdb.org/files/fdb-paper.pdf) [[1]](#source-1).
 
 **Направление Duro:** проверка корректности и поведения при отказах – [NFR-02](../requirements/nonfunctional/NFR-02.md) и [NFR-09](../requirements/nonfunctional/NFR-09.md).
 
@@ -35,18 +35,18 @@ FoundationDB – транзакционное key-value хранилище с р
 
 ## Рядом по теме
 
-- Elle [[2]](#source-2) – вывод аномалий изоляции из наблюдённых историй операций; основа Jepsen.
+- Elle [[2]](#source-2) – инструмент проверки транзакций в Jepsen, который выявляет аномалии изоляции по наблюдённым историям операций.
 - Анализ отказов из-за разделения сети в 25 распределённых системах [[3]](#source-3) – готовый набор сценариев для внесения отказов.
 
 ## Литература
 
 <a id="source-1"></a>
 
-[1] Zhou J., Xu M., Shraer A., Namasivayam B., Miller A., Tschannen E., Atherton S., Beamon A. J., Sears R., Leach J., Rosenthal D., Dong X., Wilson W., Collins B., Scherer D., Grieser A., Liu Y., Moore A., Muppana B., Su X., Yadav V. [FoundationDB: A Distributed Unbundled Transactional Key Value Store](https://doi.org/10.1145/3448016.3457559). SIGMOD 2021, с. 2653–2666. DOI: 10.1145/3448016.3457559.
+[1] Zhou J., Xu M., Shraer A., Namasivayam B., Miller A., Tschannen E., Atherton S., Beamon A. J., Sears R., Leach J., Rosenthal D., Dong X., Wilson W., Collins B., Scherer D., Grieser A., Liu Y., Moore A., Muppana B., Su X., Yadav V. [FoundationDB: A Distributed Unbundled Transactional Key Value Store](https://doi.org/10.1145/3448016.3457559). SIGMOD 2021, с. 2653–2666. DOI: 10.1145/3448016.3457559. [Текст статьи](https://www.foundationdb.org/files/fdb-paper.pdf).
 
 <a id="source-2"></a>
 
-[2] Kingsbury K., Alvaro P. [Elle: Inferring Isolation Anomalies from Experimental Observations](https://doi.org/10.14778/3430915.3430918). Proceedings of the VLDB Endowment, 14(3): 268–280, 2020. DOI: 10.14778/3430915.3430918.
+[2] Kingsbury K., Alvaro P. [Elle: Inferring Isolation Anomalies from Experimental Observations](https://doi.org/10.14778/3430915.3430918). Proceedings of the VLDB Endowment, 14(3): 268–280, 2020. DOI: 10.14778/3430915.3430918. [Текст статьи](https://www.vldb.org/pvldb/vol14/p268-alvaro.pdf).
 
 <a id="source-3"></a>
 
