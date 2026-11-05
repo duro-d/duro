@@ -10,7 +10,7 @@
 | [Durable Functions](Literature-Durable-Functions.md) | OOPSLA 2021 | Атомарная фиксация, повторы и границы восстановления |
 | [FoundationDB](Literature-FoundationDB.md) | SIGMOD 2021 | Воспроизводимая проверка отказов и инвариантов |
 
-Для реализации отдельно используются первоисточники по [V8 и deno_core](https://github.com/denoland/deno/blob/main/libs/core/README.md), [синхронной репликации PostgreSQL](https://www.postgresql.org/docs/18/warm-standby.html#SYNCHRONOUS-REPLICATION), [Patroni](https://patroni.readthedocs.io/en/latest/replication_modes.html) и [etcd](https://etcd.io/docs/v3.6/learning/api_guarantees/). Документация технологий не заменяет научный обзор.
+Для реализации отдельно используются первоисточники по [V8 и deno_core](https://github.com/denoland/deno/blob/main/libs/core/README.md), [синхронной репликации PostgreSQL](https://www.postgresql.org/docs/18/warm-standby.html#SYNCHRONOUS-REPLICATION), [Patroni](https://patroni.readthedocs.io/en/latest/replication_modes.html) и [etcd](https://etcd.io/docs/v3.6/learning/api_guarantees/).
 
 ## Вопросы для исследования
 
@@ -20,7 +20,7 @@
 | Исполнение | Как очереди и управление активными состояниями влияют на задержки остальных объектов? | Базовое планирование и планирование с разделением очередей объектов |
 | Состояние | Как меняется цена долговечной фиксации и восстановления при росте потока? | Разные схемы обновления и пакетной обработки при одинаковых гарантиях |
 
-В MVP реализуются базовые политики и измерительный стенд. Более сложные алгоритмы — продолжение магистерских исследований. Новизна и превосходство не считаются доказанными до обзора литературы и экспериментов.
+В MVP реализуются базовые политики и измерительный стенд. Более сложные алгоритмы – продолжение магистерских исследований. Новизна и превосходство не считаются доказанными до обзора литературы и экспериментов.
 
 ## Методика
 
