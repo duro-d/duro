@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package duro.v1;
+
+import "duro/v1/common.proto";
+
+option go_package = "github.com/duro-d/duro/api/gen/go/duro/v1;durov1";
+
+// Match the addressed worker_id to the running process and reject stale owners
+// before admission. A new epoch loads a fresh copy of confirmed state.
+service WorkerService {
+  // Check the manifest, bundle digest and V8 exports without calling init.
+  rpc ValidateCode(ValidateCodeRequest) returns (ValidateCodeResponse);
+  // Load the pinned code and confirmed state for this generation. A reserved
+  // create stays pending. Only CreateObject may call init.
+  rpc ActivateObject(ActivateObjectRequest) returns (ActivateObjectResponse);
+  // Resolve a matching recorded outcome before running init. Create and invoke
+  // return only outcomes that storage confirms as durable.
+  rpc CreateObject(CreateObjectRequest) returns (CreateObjectResponse);
+  rpc InvokeObject(InvokeObjectRequest) returns (InvokeObjectResponse);
+  // Close admission for this generation, including calls on cached routes.
+  // Repeating a drain reads its phase. Repeating activation cannot reopen it.
+  rpc DrainObject(DrainObjectRequest) returns (DrainObjectResponse);
+  rpc PollWorker(PollWorkerRequest) returns (PollWorkerResponse);
+  rpc ConfirmAssignments(ConfirmAssignmentsRequest) returns (ConfirmAssignmentsResponse);
+}
+
+message ValidateCodeRequest {
+  CodePackage code_package = 1;
+}
+
+message ValidateCodeResponse {
+  // sha256 is computed over the exact bundle bytes received.
+  CodeRef validated = 1;
+}
+
+message ActivateObjectRequest {
+  Owner owner = 1;
+  // Omit for ordinary activation. On transfer, match the recorded target and ID.
+  optional string transition_id = 2;
+}
+
+message ActivateObjectResponse {
+  Owner owner = 1;
+  optional string transition_id = 2;
+}
+
+message CreateObjectRequest {
+  Owner owner = 1;
+  // The operation's object_id must match owner.object_id.
+  CreateOperation operation = 2;
+  // Storage issued this token for the request. Check it with the epoch at commit.
+  bytes reservation_token = 3;
+}
+
+message CreateObjectResponse {
+  Owner owner = 1;
+  OperationResult outcome = 2;
+}
+
+message InvokeObjectRequest {
+  Owner owner = 1;
+  // The operation's object_id must match owner.object_id.
+  InvokeOperation operation = 2;
+}
+
+message InvokeObjectResponse {
+  Owner owner = 1;
+  OperationResult outcome = 2;
+}
+
+message DrainObjectRequest {
+  Owner source = 1;
+  // Match the persisted transfer before closing admission.
+  string transition_id = 2;
+}
+
+message DrainObjectResponse {
+  Owner source = 1;
+  string transition_id = 2;
+  DrainPhase phase = 3;
+}
+
+enum DrainPhase {
+  DRAIN_PHASE_UNSPECIFIED = 0;
+  DRAIN_PHASE_DRAINING = 1;
+  // Admission stays closed. All queued calls have finished or failed, and
+  // storage has resolved the outcome of every commit from this generation.
+  DRAIN_PHASE_DRAINED = 2;
+}
+
+message PollWorkerRequest {
+  string worker_id = 1;
+}
+
+message PollWorkerResponse {
+  string worker_id = 1;
+  bool ready = 2;
+  bool has_capacity_for_new_assignments = 3;
+  // Absent until the first measurement window closes.
+  WorkerLoadSample load = 4;
+}
+
+message WorkerLoadSample {
+  uint32 window_ms = 1; // Positive duration of the measurement window.
+  // Elapsed since the window closed, measured by the worker at reply time.
+  // Add the poll round-trip time for a conservative age bound at receipt.
+  uint64 age_ms = 2;
+  uint32 queue_depth = 3;
+  uint32 queue_limit = 4; // Positive number of waiting calls the worker accepts.
+  double busy_fraction = 5; // Finite, in [0, 1], across all execution slots.
+  // At most 16 owners, in descending call_count over the same window.
+  repeated HotObject hot_objects = 6;
+}
+
+message HotObject {
+  Owner owner = 1;
+  uint64 call_count = 2;
+  // This object's share of all available slot time in the window, in [0, 1].
+  double busy_fraction = 3;
+}
+
+message ConfirmAssignmentsRequest {
+  string worker_id = 1;
+  // One to 128 distinct assignments, all for this worker incarnation.
+  repeated Owner assignments = 2;
+}
+
+message ConfirmAssignmentsResponse {
+  string worker_id = 1;
+  // Subset of the request that this incarnation is ready to keep serving at
+  // the exact epochs. Omit draining assignments. Use once for this renewal poll.
+  // Storage still checks the current owner, epoch, phase, controller term and lease.
+  repeated Owner confirmed = 2;
+}
