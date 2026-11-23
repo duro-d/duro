@@ -1,0 +1,306 @@
+syntax = "proto3";
+
+package duro.v1;
+
+import "duro/v1/common.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/duro-d/duro/api/gen/go/duro/v1;durov1";
+
+// Routing reads confirmed data from the primary. Storage returns UNAVAILABLE
+// while it cannot establish durability, including after a primary change.
+// A lost reply to a write leaves its outcome unknown. Retry with the same
+// identifiers or read it back. All controller writes compare the current
+// election term in the same serialization order as the change they authorize.
+service PlacementService {
+  // Publish the exact package the worker validated. Repeating an identical
+  // manifest and bundle returns the same reference. A different package at
+  // the same type and version fails with CODE_VERSION_CONFLICT.
+  rpc RegisterType(RegisterTypeRequest) returns (RegisterTypeResponse);
+
+  // Read the pinned code and its method names for a committed object.
+  // A missing object or a create reservation returns NOT_FOUND.
+  rpc DescribeObject(DescribeObjectRequest) returns (DescribeObjectResponse);
+
+  // Read the full KV at one confirmed version. A missing object or a create
+  // reservation returns NOT_FOUND. A committed object may have an empty KV.
+  rpc ReadObject(ReadObjectRequest) returns (ReadObjectResponse);
+
+  // Return the live owner of a committed, routable object. An expired lease
+  // or unfinished transfer returns UNAVAILABLE. A reservation or missing
+  // object returns NOT_FOUND. A committed object awaiting its first assignment
+  // returns unassigned so the controller can call BeginTransfer.
+  rpc GetOwner(GetOwnerRequest) returns (GetOwnerResponse);
+
+  // Compare the kind and all parameters at (object_id, request_id), even if
+  // the object is absent. A durable matching record returns its result.
+  // A durable mismatch fails with REQUEST_ID_CONFLICT. An unresolved attempt
+  // returns UNAVAILABLE if storage cannot determine its outcome.
+  rpc LookupOperation(LookupOperationRequest) returns (LookupOperationResponse);
+
+  // Register the nonzero etcd election revision before issuing controller
+  // writes. Repeating the current term succeeds. A smaller term fails with
+  // FAILED_PRECONDITION. Registration fences all earlier terms.
+  rpc RegisterControllerTerm(RegisterControllerTermRequest) returns (RegisterControllerTermResponse);
+
+  // Check deduplication before checking object existence. A completed repeat
+  // returns its result. A different request for a committed object fails with
+  // OBJECT_ALREADY_EXISTS. For a new create, pin its operation, token and
+  // first owner atomically. Identical pending operations share the winning
+  // reservation, even if another controller proposed a different worker.
+  // A competing operation waits (UNAVAILABLE) until the pending one resolves.
+  // A retired proposal token cannot create a reservation again.
+  rpc ReserveCreate(ReserveCreateRequest) returns (ReserveCreateResponse);
+
+  // Match object, request ID, token and owner generation. Serialize the fence
+  // with init commit. Release only after proving init did not commit and
+  // fencing any late commit. Repeating the release of that token is safe.
+  // A completed init or a different reservation fails with FAILED_PRECONDITION.
+  // On UNAVAILABLE keep the intent for recovery. A fresh attempt for the same
+  // operation uses a fresh token and receives a higher epoch.
+  rpc AbandonCreate(AbandonCreateRequest) returns (AbandonCreateResponse);
+
+  // Record the source, target and transition ID. Match the current owner,
+  // including its epoch, and stop its renewals. For a committed object with
+  // no assignment, omit source to grant a first lease in ACTIVATING after
+  // storage verifies the confirmed state. A create reservation uses its own
+  // recovery path. A conflicting transition fails with FAILED_PRECONDITION.
+  // An exact retry returns the recorded phase while the transition is current.
+  rpc BeginTransfer(BeginTransferRequest) returns (BeginTransferResponse);
+
+  // In DRAINING, require the controller's acknowledgment of drain for this
+  // source and transition, or verify expiry on the storage clock. Serialize
+  // the fence with every source commit. Certify that the target can recover
+  // KV and request results at the same durable boundary. If durability is
+  // unknown, keep DRAINING and return UNAVAILABLE. Grant a strictly newer
+  // epoch and enter ACTIVATING atomically. A retry returns the same grant.
+  rpc FenceTransfer(FenceTransferRequest) returns (FenceTransferResponse);
+
+  // Match the worker's activation acknowledgment to the transition ID and
+  // exact target. Open routing only for a still-live target in ACTIVATING.
+  // Repeating completion for the same generation succeeds. A superseded
+  // transition or stale acknowledgment fails with FAILED_PRECONDITION.
+  rpc FinishTransfer(FinishTransferRequest) returns (FinishTransferResponse);
+
+  // Renew only generations just confirmed by their worker. Check owner, epoch,
+  // phase, expected expiry and storage time for each entry. Each reply names
+  // its entry; retrying a batch cannot extend a lease twice from one report.
+  rpc RenewLeases(RenewLeasesRequest) returns (RenewLeasesResponse);
+
+  // Scan an index by owner, pending work or expiry. Use the returned cursor
+  // with the same filter. A pass visits matching, continuously present entries
+  // in object ID order. Repeat passes to find additions behind the cursor.
+  // Each controller write checks the current generation and phase again.
+  rpc ListPlacements(ListPlacementsRequest) returns (ListPlacementsResponse);
+}
+
+message RegisterTypeRequest {
+  CodePackage code = 1;
+}
+
+message RegisterTypeResponse {
+  CodeRef code = 1;
+}
+
+message DescribeObjectRequest {
+  string object_id = 1;
+}
+
+message DescribeObjectResponse {
+  string object_id = 1;
+  CodeRef code = 2;
+  repeated string methods = 3;
+}
+
+message ReadObjectRequest {
+  string object_id = 1;
+}
+
+message ReadObjectResponse {
+  // A present key can contain the JSON literal null. Missing keys have no entry.
+  map<string, JsonValue> kv = 1;
+}
+
+message OwnerLease {
+  Owner owner = 1;
+  // Storage checks this deadline at commit. Clients use it for observation.
+  google.protobuf.Timestamp lease_until = 2;
+}
+
+message GetOwnerRequest {
+  string object_id = 1;
+}
+
+message GetOwnerResponse {
+  oneof assignment {
+    OwnerLease active = 1;
+    google.protobuf.Empty unassigned = 2;
+  }
+}
+
+message LookupOperationRequest {
+  oneof operation {
+    CreateOperation create = 1;
+    InvokeOperation invoke = 2;
+  }
+}
+
+message LookupOperationResponse {
+  oneof observation {
+    OperationResult completed = 1;
+    // The primary has no receipt at the confirmed read boundary. A later
+    // commit may still win. A retry must preserve the request ID and body.
+    google.protobuf.Empty absent = 2;
+  }
+}
+
+message RegisterControllerTermRequest {
+  uint64 controller_term = 1;
+}
+
+message RegisterControllerTermResponse {}
+
+message CreateReservation {
+  CreateOperation operation = 1;
+  bytes reservation_token = 2;
+  OwnerLease lease = 3;
+}
+
+message ReserveCreateRequest {
+  uint64 controller_term = 1;
+  CreateOperation operation = 2;
+  string target_worker_id = 3;
+  // Globally unique, nonempty bytes chosen before the first send.
+  bytes reservation_token = 4;
+}
+
+message ReserveCreateResponse {
+  oneof outcome {
+    CreateReservation reservation = 1;
+    OperationResult completed = 2;
+  }
+}
+
+message AbandonCreateRequest {
+  uint64 controller_term = 1;
+  Owner owner = 2;
+  string request_id = 3;
+  bytes reservation_token = 4;
+}
+
+message AbandonCreateResponse {}
+
+enum TransferPhase {
+  TRANSFER_PHASE_UNSPECIFIED = 0;
+  TRANSFER_PHASE_DRAINING = 1;
+  TRANSFER_PHASE_ACTIVATING = 2;
+  TRANSFER_PHASE_COMPLETE = 3;
+}
+
+message PlacementTransfer {
+  string object_id = 1;
+  string transition_id = 2;
+  // Retain the previous generation through activation and leader changes.
+  // Only a first assignment has no source.
+  OwnerLease source = 3;
+  string target_worker_id = 4;
+  TransferPhase phase = 5;
+  // Storage allocates this generation on entry to ACTIVATING.
+  OwnerLease target = 6;
+}
+
+message BeginTransferRequest {
+  uint64 controller_term = 1;
+  string object_id = 2;
+  // Globally unique. Reuse only to retry the same move.
+  string transition_id = 3;
+  Owner source = 4;
+  string target_worker_id = 5;
+  // To replace a target that failed before FinishTransfer, name the previous
+  // ACTIVATING transition and pass its exact target as source. Storage must
+  // verify that target's lease expired before replacing its pending record.
+  optional string replaces_transition_id = 6;
+}
+
+message BeginTransferResponse {
+  PlacementTransfer transfer = 1;
+}
+
+message FenceTransferRequest {
+  uint64 controller_term = 1;
+  string transition_id = 2;
+  Owner source = 3;
+  oneof authority {
+    // The source worker acknowledged drain for this transition ID and Owner.
+    google.protobuf.Empty drain_acknowledged = 4;
+    // Storage checks lease_until itself. A controller timeout grants no rights.
+    google.protobuf.Empty require_expired_lease = 5;
+  }
+}
+
+message FenceTransferResponse {
+  PlacementTransfer transfer = 1;
+}
+
+message FinishTransferRequest {
+  uint64 controller_term = 1;
+  string transition_id = 2;
+  Owner activated_owner = 3;
+}
+
+message FinishTransferResponse {}
+
+message LeaseRenewal {
+  Owner owner = 1;
+  google.protobuf.Timestamp expected_lease_until = 2;
+}
+
+message RenewLeasesRequest {
+  uint64 controller_term = 1;
+  repeated LeaseRenewal renewals = 2;
+}
+
+message LeaseRenewalResult {
+  Owner requested_owner = 1;
+  oneof outcome {
+    // Current live lease for this generation. If the expected deadline
+    // already changed, return the current deadline without extending it.
+    OwnerLease current = 2;
+    // Owner changed, lease expired or phase forbids renewal. The controller
+    // must look up the assignment again before contacting the worker.
+    google.protobuf.Empty rejected = 3;
+  }
+}
+
+message RenewLeasesResponse {
+  repeated LeaseRenewalResult results = 1;
+}
+
+message ListPlacementsRequest {
+  oneof filter {
+    // Includes assignments whose lease expired and unpublished reservations.
+    string worker_id = 1;
+    // Enumerates all create reservations and all transfers awaiting action.
+    google.protobuf.Empty pending = 2;
+    // Uses storage time and includes expired leases of still-registered workers.
+    google.protobuf.Empty expired = 3;
+  }
+  // Zero requests the service default. Storage may shorten a page to fit
+  // the response byte limit; a nonempty next_page_token continues the pass.
+  uint32 page_size = 4;
+  bytes page_token = 5;
+}
+
+message PlacementEntry {
+  oneof assignment {
+    OwnerLease assigned = 1;
+    CreateReservation reservation = 2;
+    PlacementTransfer transfer = 3;
+  }
+}
+
+message ListPlacementsResponse {
+  repeated PlacementEntry placements = 1;
+  bytes next_page_token = 2;
+}
