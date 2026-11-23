@@ -145,9 +145,11 @@ func (c *Controller) poll(ctx context.Context, id string, previous placement.Loa
 }
 
 type joinScan struct {
-	target  string
-	sources []string
-	cursor  []byte
+	target, source string
+	afterSource    string
+	cursor         []byte
+	notBefore      time.Time
+	revisitAfter   time.Time
 }
 
 func (c *Controller) policyLoop(s *session) {
@@ -166,10 +168,13 @@ func (c *Controller) policyLoop(s *session) {
 				ids = append(ids, id)
 				live[id] = true
 			}
-			if c.policy == placement.HRW && previous != nil {
+			if c.policy == placement.HRW {
+				joins = slices.DeleteFunc(joins, func(j joinScan) bool { return !live[j.target] })
+				// A successor cannot tell which join scans its predecessor finished.
+				// Scan once for current targets, then only when a new target joins.
 				for _, id := range ids {
 					if !previous[id] {
-						joins = append(joins, joinScan{target: id, sources: slices.Clone(ids)})
+						joins = append(joins, joinScan{target: id})
 					}
 				}
 			}
@@ -193,7 +198,7 @@ func (c *Controller) policyLoop(s *session) {
 				if len(joins) > 0 {
 					job := joins[0]
 					joins = joins[1:]
-					if live[job.target] && !c.planJoin(ctx, s, &job, polls, limits, now) {
+					if !c.planJoin(ctx, s, &job, ids, polls, limits, now) {
 						joins = append(joins, job)
 					}
 				}
@@ -228,15 +233,29 @@ func (c *Controller) planLoad(ctx context.Context, s *session, polls []observati
 	}
 }
 
-func (c *Controller) planJoin(ctx context.Context, s *session, j *joinScan, polls []observation, limits placement.Limits, now time.Time) bool {
-	for len(j.sources) > 0 && j.sources[0] == j.target {
-		j.sources = j.sources[1:]
-	}
-	if len(j.sources) == 0 {
-		return true
-	}
-	if now.Sub(limits.LastStart) < time.Second {
+func (c *Controller) planJoin(ctx context.Context, s *session, j *joinScan, ids []string, polls []observation, limits placement.Limits, now time.Time) bool {
+	if now.Before(j.notBefore) || now.Sub(limits.LastStart) < time.Second {
 		return false
+	}
+	i, found := slices.BinarySearch(ids, j.afterSource)
+	if found {
+		i++
+	}
+	if i < len(ids) && ids[i] == j.target {
+		i++
+	}
+	if i == len(ids) {
+		if j.revisitAfter.IsZero() {
+			return true
+		}
+		// Retain one timestamp for this target, regardless of how many objects
+		// were cooling down. Revisit after the last observed cooldown ends.
+		j.afterSource, j.source, j.cursor = "", "", nil
+		j.notBefore, j.revisitAfter = j.revisitAfter, time.Time{}
+		return false
+	}
+	if j.source != ids[i] {
+		j.source, j.cursor = ids[i], nil
 	}
 	candidates := make([]placement.Candidate, 0, len(polls))
 	targetReady := false
@@ -250,7 +269,7 @@ func (c *Controller) planJoin(ctx context.Context, s *session, j *joinScan, poll
 	if !targetReady {
 		return false
 	}
-	req := workerFilter(j.sources[0])
+	req := workerFilter(j.source)
 	req.PageToken = j.cursor
 	req.PageSize = pageSize
 	r, err := c.store.ListPlacements(ctx, req)
@@ -261,7 +280,7 @@ func (c *Controller) planJoin(ctx context.Context, s *session, j *joinScan, poll
 	s.mu.Lock()
 	for _, e := range r.Placements {
 		o := e.GetAssigned().GetOwner()
-		if o.GetWorkerId() == j.sources[0] {
+		if o.GetWorkerId() == j.source {
 			a := assignment(o)
 			a.LastMoved = s.lastMoveLocked(a)
 			owners = append(owners, a)
@@ -272,9 +291,20 @@ func (c *Controller) planJoin(ctx context.Context, s *session, j *joinScan, poll
 		_ = c.plan(ctx, s, m, "hrw")
 		return false // Revisit this page for the remaining assignments.
 	}
+	// With an unchanged membership, a temporarily ineligible HRW winner is
+	// the only reason to revisit an otherwise completed page.
+	for _, a := range owners {
+		until := a.LastMoved.Add(time.Minute)
+		if !until.After(now) || !until.After(j.revisitAfter) {
+			continue
+		}
+		if _, ok := placement.PlanJoin(j.target, candidates, []placement.Assignment{a}, limits, until); ok {
+			j.revisitAfter = until
+		}
+	}
 	j.cursor = r.NextPageToken
 	if len(j.cursor) == 0 {
-		j.sources = j.sources[1:]
+		j.afterSource = j.source
 	}
-	return len(j.sources) == 0
+	return false
 }

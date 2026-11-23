@@ -5,7 +5,9 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pb "github.com/duro-d/duro/api/gen/go/duro/v1"
@@ -413,6 +415,103 @@ func TestFreshLeaderRespectsCooldownForPriorGenerations(t *testing.T) {
 	m := placement.Move{Source: placement.Assignment{ObjectID: "lot", WorkerID: "a", Epoch: 2}, Target: "b"}
 	if err := c.plan(t.Context(), s, m, "manual"); status.Code(err) != codes.Unavailable || s.planned != nil {
 		t.Fatalf("unobserved cooldown: %v %v", err, s.planned)
+	}
+}
+
+type joinStore struct {
+	moveStore
+	owner *pb.Owner
+	pages atomic.Int32
+}
+
+func (s *joinStore) ListPlacements(_ context.Context, r *pb.ListPlacementsRequest, _ ...grpc.CallOption) (*pb.ListPlacementsResponse, error) {
+	s.pages.Add(1)
+	page := &pb.ListPlacementsResponse{}
+	if r.GetWorkerId() == s.owner.WorkerId {
+		page.Placements = []*pb.PlacementEntry{{Assignment: &pb.PlacementEntry_Assigned{Assigned: &pb.OwnerLease{Owner: s.owner}}}}
+	}
+	return page, nil
+}
+
+type joiningDirectory struct {
+	directory
+	source string
+	joined atomic.Bool
+}
+
+func (d *joiningDirectory) Workers(ctx context.Context) ([]string, error) {
+	if !d.joined.Load() {
+		return []string{d.source}, nil
+	}
+	return d.directory.Workers(ctx)
+}
+
+func TestHRWReconcilesCoolingOwnerAfterJoinOrElection(t *testing.T) {
+	for _, stage := range []string{"join", "election"} {
+		t.Run(stage, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				nodes := []placement.Candidate{
+					{ID: "a", Mode: placement.Active, Ready: true, FreeCapacity: 1},
+					{ID: "b", Mode: placement.Active, Ready: true, FreeCapacity: 1},
+				}
+				best, err := placement.Select(placement.HRW, "lot", nodes, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				source := "a"
+				if best.WorkerID == source {
+					source = "b"
+				}
+				store := &joinStore{owner: &pb.Owner{ObjectId: "lot", WorkerId: source, Epoch: 2}}
+				started := make(chan *pb.BeginTransferRequest, 2)
+				store.begin = func(r *pb.BeginTransferRequest) (*pb.BeginTransferResponse, error) {
+					started <- r
+					return nil, unavailable("transfer recorded, reply lost")
+				}
+				dir := &joiningDirectory{directory: directory{source: worker{}, best.WorkerID: worker{}}, source: source}
+				c, s := activeController(t, store, dir.directory)
+				c.dir = dir
+				if stage == "election" {
+					dir.joined.Store(true)
+					s.started = time.Now()
+				} else {
+					s.lastMoved["lot"] = completedMove{at: time.Now(), epoch: 2}
+				}
+				go c.policyLoop(s)
+				defer func() { s.cancel(); synctest.Wait() }()
+				synctest.Wait()
+				if stage == "join" {
+					dir.joined.Store(true)
+				}
+				time.Sleep(15 * time.Second)
+				synctest.Wait()
+				pages := store.pages.Load()
+				time.Sleep(40 * time.Second)
+				synctest.Wait()
+				if pages == 0 || store.pages.Load() != pages || len(started) != 0 {
+					t.Fatalf("cooldown: page reads %d then %d, moves %d", pages, store.pages.Load(), len(started))
+				}
+				s.mu.Lock()
+				s.recovering++
+				s.mu.Unlock()
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				if len(started) != 0 {
+					t.Fatal("started a planned move during recovery")
+				}
+				s.mu.Lock()
+				s.recovering--
+				s.mu.Unlock()
+				time.Sleep(5 * time.Second)
+				synctest.Wait()
+				if len(started) != 1 {
+					t.Fatalf("moves after cooldown: %d", len(started))
+				}
+				if r := <-started; r.TargetWorkerId != best.WorkerID || !proto.Equal(r.Source, store.owner) {
+					t.Fatalf("unexpected HRW move: %v", r)
+				}
+			})
+		})
 	}
 }
 
