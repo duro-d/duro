@@ -1,0 +1,3 @@
+- targets:
+    - host.docker.internal:18081
+    - host.docker.internal:18082

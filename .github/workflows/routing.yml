@@ -1,0 +1,67 @@
+name: Routing
+on:
+  pull_request:
+    paths: ['api/**', 'routing/**', '.github/workflows/routing.yml']
+  push:
+    branches: [main]
+    paths: ['api/**', 'routing/**', '.github/workflows/routing.yml']
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: |
+            api/go.sum
+            routing/go.sum
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99
+        with:
+          version: '1.68.1'
+      - name: Check Protobuf and generated clients
+        working-directory: api
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
+          buf lint
+          if [ -n "${BASE_SHA}" ]; then
+            git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+            if git cat-file -e "${BASE_SHA}:api/buf.yaml" 2>/dev/null; then
+              git -C .. archive "${BASE_SHA}" api | tar -x -C "$RUNNER_TEMP"
+              buf breaking --against "$RUNNER_TEMP/api"
+            fi
+          fi
+          buf generate
+          git diff --exit-code -- gen/go
+          test -z "$(git ls-files --others --exclude-standard -- gen/go)"
+          go test -race ./...
+      - name: Test routing
+        working-directory: routing
+        run: |
+          go vet ./...
+          go test -race ./...
+  scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [hrw, load]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: routing/go.sum
+      - run: python3 routing/e2e/run.py --policy "${{ matrix.policy }}" --artifacts results
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: routing-${{ matrix.policy }}
+          path: results/
