@@ -219,6 +219,38 @@ func TestErrorContract(t *testing.T) {
 	}
 }
 
+func TestLostMutationReplyThenTerminalError(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		readBody(t, r)
+		// The router accepted the mutation, but the reply was truncated.
+		w.Header().Set("Content-Length", "20")
+		fmt.Fprint(w, "{")
+	}))
+	defer first.Close()
+	for _, tc := range []struct {
+		status  int
+		code    string
+		unknown bool
+	}{
+		{http.StatusUnauthorized, "UNAUTHORIZED", true},
+		{http.StatusUnprocessableEntity, "DOMAIN_REJECTED", false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			next := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprintf(w, `{"code":%q}`, tc.code)
+			}))
+			defer next.Close()
+			m := invoke(t, testClient(t, first.URL, next.URL), "saved")
+			_, err := m.Do(context.Background())
+			var failure *Error
+			if !errors.As(err, &failure) || failure.Code != tc.code || failure.UnknownOutcome != tc.unknown || failure.RequestID != "saved" {
+				t.Fatalf("terminal error after truncated reply: %+v", failure)
+			}
+		})
+	}
+}
+
 func TestCancellationAndResume(t *testing.T) {
 	bodies := make(chan string, 2)
 	var attempts atomic.Int32

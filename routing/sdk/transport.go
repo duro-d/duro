@@ -84,11 +84,15 @@ func (c *Client) send(ctx context.Context, operation, id string, body []byte, re
 		if failure == nil {
 			return nil
 		}
+		// A durable domain rejection resolves the mutation. An admission or
+		// transport failure on a later router says nothing about an earlier send.
+		if failure.StatusCode != http.StatusUnprocessableEntity || failure.Code != "DOMAIN_REJECTED" {
+			failure.UnknownOutcome = unknown || failure.UnknownOutcome
+		}
 		if !retry {
 			return failure
 		}
-		unknown = unknown || failure.UnknownOutcome
-		failure.UnknownOutcome = unknown
+		unknown = failure.UnknownOutcome
 		last = failure
 		if err := ctx.Err(); err != nil {
 			return stopped(last, id, err)
@@ -141,7 +145,7 @@ func (c *Client) attempt(ctx context.Context, endpoint, operation, id string, bo
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if int64(len(data)) > limit {
 		err = fmt.Errorf("response exceeds %d bytes", limit)
-		failure := &Error{StatusCode: resp.StatusCode, RequestID: id, Cause: err, UnknownOutcome: success && changesState(operation)}
+		failure := &Error{StatusCode: resp.StatusCode, RequestID: id, Cause: err, UnknownOutcome: changesState(operation) && (success || resp.StatusCode >= 500)}
 		return failure, resp.StatusCode == http.StatusServiceUnavailable
 	}
 	if err != nil {

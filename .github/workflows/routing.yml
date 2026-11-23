@@ -33,12 +33,13 @@ jobs:
           if [ -n "${BASE_SHA}" ]; then
             git fetch --no-tags --depth=1 origin "${BASE_SHA}"
             if git cat-file -e "${BASE_SHA}:api/buf.yaml" 2>/dev/null; then
-              git archive "${BASE_SHA}" api | tar -x -C "$RUNNER_TEMP"
+              git -C .. archive "${BASE_SHA}" api | tar -x -C "$RUNNER_TEMP"
               buf breaking --against "$RUNNER_TEMP/api"
             fi
           fi
           buf generate
           git diff --exit-code -- gen/go
+          test -z "$(git ls-files --others --exclude-standard -- gen/go)"
           go test -race ./...
       - name: Test routing
         working-directory: routing

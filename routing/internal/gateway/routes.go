@@ -37,6 +37,9 @@ type cacheEntry struct {
 
 type flight struct {
 	done          chan struct{}
+	cancel        context.CancelFunc
+	waiters       int
+	interrupted   bool
 	rejectedEpoch uint64
 	route         route
 	err           error
@@ -59,50 +62,69 @@ func newResolver(cfg Config, find func(context.Context, string) (route, error)) 
 }
 
 func (s *resolver) resolve(ctx context.Context, id string) (route, error) {
-	if err := ctx.Err(); err != nil {
-		return route{}, err
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > s.config.Timeout {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.config.Timeout)
+		defer cancel()
 	}
-	s.mu.Lock()
-	if elem := s.entries[id]; elem != nil {
-		entry := elem.Value.(cacheEntry)
-		if s.now().Before(entry.expires) {
-			s.hits++
-			s.lru.MoveToFront(elem)
-			s.mu.Unlock()
-			return entry.route, nil
+	deadline, _ := ctx.Deadline()
+	for ctx.Err() == nil {
+		s.mu.Lock()
+		if elem := s.entries[id]; elem != nil {
+			entry := elem.Value.(cacheEntry)
+			if s.now().Before(entry.expires) {
+				s.hits++
+				s.lru.MoveToFront(elem)
+				s.mu.Unlock()
+				return entry.route, nil
+			}
+			s.remove(elem)
 		}
-		s.remove(elem)
-	}
-	s.misses++
-	call := s.pending[id]
-	if call == nil {
-		if len(s.pending) >= s.config.MaxLookups {
-			s.mu.Unlock()
-			return route{}, overloaded
+		s.misses++
+		call := s.pending[id]
+		if call == nil {
+			if len(s.pending) >= s.config.MaxLookups {
+				s.mu.Unlock()
+				return route{}, overloaded
+			}
+			// The RPC inherits the starting waiter's deadline. A later waiter with
+			// more time can retry when this RPC expires.
+			rpc, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+			call = &flight{done: make(chan struct{}), cancel: cancel}
+			s.pending[id] = call
+			go s.lookup(rpc, id, call)
 		}
-		call = &flight{done: make(chan struct{})}
-		s.pending[id] = call
-		go s.lookup(context.WithoutCancel(ctx), id, call)
+		call.waiters++
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			s.mu.Lock()
+			call.waiters--
+			if call.waiters == 0 {
+				call.cancel()
+			}
+			s.mu.Unlock()
+			return route{}, ctx.Err()
+		case <-call.done:
+			if call.interrupted && time.Now().Before(deadline) {
+				continue
+			}
+			return call.route, call.err
+		}
 	}
-	s.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return route{}, ctx.Err()
-	case <-call.done:
-		return call.route, call.err
-	}
+	return route{}, ctx.Err()
 }
 
-func (s *resolver) lookup(parent context.Context, id string, f *flight) {
-	ctx, cancel := context.WithTimeout(parent, s.config.Timeout)
-	defer cancel()
+func (s *resolver) lookup(ctx context.Context, id string, f *flight) {
+	defer f.cancel()
 	r, err := s.find(ctx, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err == nil {
+	if ctx.Err() != nil {
+		f.interrupted = true
+		err = ctx.Err()
+	} else if err == nil {
 		switch {
-		case ctx.Err() != nil:
-			err = ctx.Err()
 		case r.epoch <= f.rejectedEpoch:
 			err = unavailable
 		default:

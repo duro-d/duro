@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	pb "github.com/duro-d/duro/api/gen/go/duro/v1"
@@ -92,37 +93,107 @@ func TestLateStaleResponses(t *testing.T) {
 }
 
 func TestLookupCoalescesWithIndependentCancellation(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	var n atomic.Int32
-	s := New(Config{MaxLookups: 1}, nil, nil).routes
-	s.find = func(ctx context.Context, id string) (route, error) {
-		if n.Add(1) == 1 {
-			close(started)
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		var n atomic.Int32
+		s := New(Config{MaxLookups: 1}, nil, nil).routes
+		s.find = func(ctx context.Context, id string) (route, error) {
+			if n.Add(1) == 1 {
+				close(started)
+			}
+			select {
+			case <-ctx.Done():
+				return route{}, ctx.Err()
+			case <-release:
+				return route{id, "w", 1}, nil
+			}
 		}
-		select {
-		case <-ctx.Done():
+		ctx, cancel := context.WithCancel(context.Background())
+		waiter1 := make(chan error, 1)
+		go func() { _, err := s.resolve(ctx, "a"); waiter1 <- err }()
+		<-started
+		if _, err := s.resolve(context.Background(), "b"); err != overloaded {
+			t.Fatalf("second lookup: got %v", err)
+		}
+		waiter2 := make(chan error, 1)
+		go func() { _, err := s.resolve(context.Background(), "a"); waiter2 <- err }()
+		synctest.Wait()
+		cancel()
+		if err := <-waiter1; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		close(release)
+		if err := <-waiter2; err != nil || n.Load() != 1 {
+			t.Fatal(err, n.Load())
+		}
+	})
+}
+
+func TestLookupStopsWhenLastWaiterCancels(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := New(Config{}, nil, nil).routes
+		started := make(chan context.Context, 1)
+		s.find = func(ctx context.Context, id string) (route, error) {
+			started <- ctx
+			<-ctx.Done()
 			return route{}, ctx.Err()
-		case <-release:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		done := make(chan error, 1)
+		go func() { _, err := s.resolve(ctx, "a"); done <- err }()
+		rpc := <-started
+		deadline, _ := ctx.Deadline()
+		if got, ok := rpc.Deadline(); !ok || !got.Equal(deadline) {
+			t.Fatalf("RPC deadline %v, want %v", got, deadline)
+		}
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if rpc.Err() != context.Canceled || len(s.pending) != 0 {
+			t.Fatalf("abandoned RPC: %v, pending: %d", rpc.Err(), len(s.pending))
+		}
+	})
+}
+
+func TestLongWaiterContinuesAfterSharedDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := New(Config{MaxLookups: 1}, nil, nil).routes
+		short, cancelShort := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancelShort()
+		long, cancelLong := context.WithTimeout(context.Background(), time.Second)
+		defer cancelLong()
+		deadlines := make(chan time.Time, 2)
+		var calls atomic.Int32
+		s.find = func(ctx context.Context, id string) (route, error) {
+			deadline, _ := ctx.Deadline()
+			deadlines <- deadline
+			if calls.Add(1) == 1 {
+				<-ctx.Done()
+				return route{}, ctx.Err()
+			}
 			return route{id, "w", 1}, nil
 		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	waiter1 := make(chan error, 1)
-	go func() { _, err := s.resolve(ctx, "a"); waiter1 <- err }()
-	<-started
-	if _, err := s.resolve(context.Background(), "b"); err != overloaded {
-		t.Fatalf("second lookup: got %v", err)
-	}
-	cancel()
-	if err := <-waiter1; !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	waiter2 := make(chan error, 1)
-	go func() { _, err := s.resolve(context.Background(), "a"); waiter2 <- err }()
-	close(release)
-	if err := <-waiter2; err != nil || n.Load() != 1 {
-		t.Fatal(err, n.Load())
-	}
+		first := make(chan error, 1)
+		go func() { _, err := s.resolve(short, "a"); first <- err }()
+		if got, want := <-deadlines, time.Now().Add(50*time.Millisecond); !got.Equal(want) {
+			t.Fatalf("first deadline %v, want %v", got, want)
+		}
+		second := make(chan error, 1)
+		go func() { _, err := s.resolve(long, "a"); second <- err }()
+		synctest.Wait()
+		if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		if err := <-second; err != nil {
+			t.Fatal(err)
+		}
+		want, _ := long.Deadline()
+		if got := <-deadlines; !got.Equal(want) || calls.Load() != 2 {
+			t.Fatalf("second deadline %v, want %v, lookup count %d", got, want, calls.Load())
+		}
+	})
 }
 
 func TestHTTPAdmissionAndTimeout(t *testing.T) {
