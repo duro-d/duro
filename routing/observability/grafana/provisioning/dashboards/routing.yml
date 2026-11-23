@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: Duro
+    type: file
+    options:
+      path: /etc/grafana/duro-dashboards

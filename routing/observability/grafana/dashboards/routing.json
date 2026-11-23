@@ -1,0 +1,419 @@
+{
+  "uid": "duro-routing-poc",
+  "title": "Duro · Маршрутизация PoC",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Попытки и ответы OK",
+      "description": "Завершённые HTTP-попытки по всем маршрутизаторам. Каждый повтор клиента считается ещё раз.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(duro_routing_request_seconds_count{job=\"duro-routing\"}[30s]))",
+          "legendFormat": "все попытки"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(duro_routing_request_seconds_count{job=\"duro-routing\",code=\"OK\"}[30s]))",
+          "legendFormat": "OK"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Время HTTP-запроса по операции",
+      "description": "p95 и p99 по всем исходам на стороне маршрутизатора. Расчёт по корзинам гистограммы за 30 с.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, operation)(rate(duro_routing_request_seconds_bucket{job=\"duro-routing\"}[30s])))",
+          "legendFormat": "p95 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, operation)(rate(duro_routing_request_seconds_bucket{job=\"duro-routing\"}[30s])))",
+          "legendFormat": "p99 {{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Отказы HTTP по коду",
+      "description": "Число ответов с указанным кодом в секунду.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (code)(rate(duro_routing_request_seconds_count{job=\"duro-routing\",code!=\"OK\"}[30s]))",
+          "legendFormat": "{{code}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Доступность и лидерство",
+      "description": "Доступность равна 1 при успешном сборе метрик. Лидерство равно 1 у избранного контроллера.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "custom": {
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"duro-routing\"}",
+          "legendFormat": "сбор {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "duro_routing_is_controller{job=\"duro-routing\"}",
+          "legendFormat": "лидер {{instance}} ({{policy}})"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Очереди исполнителей",
+      "description": "Минимальное и максимальное число ожидающих вызовов среди свежих выборок контроллера.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(duro_routing_worker_queue_min{job=\"duro-routing\"})",
+          "legendFormat": "минимум"
+        },
+        {
+          "refId": "B",
+          "expr": "max(duro_routing_worker_queue_max{job=\"duro-routing\"})",
+          "legendFormat": "максимум"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Занятость исполнителей",
+      "description": "Минимальная и максимальная доля занятого времени рабочих слотов среди свежих выборок контроллера.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min(duro_routing_worker_busy_ratio_min{job=\"duro-routing\"})",
+          "legendFormat": "минимум"
+        },
+        {
+          "refId": "B",
+          "expr": "max(duro_routing_worker_busy_ratio_max{job=\"duro-routing\"})",
+          "legendFormat": "максимум"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Обращения к кешу маршрутов",
+      "description": "Hit и miss учитывают поиск маршрута. Stale учитывает отказы из-за устаревшего владельца.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(duro_routing_cache_hits_total{job=\"duro-routing\"}[30s]))",
+          "legendFormat": "hit"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(duro_routing_cache_misses_total{job=\"duro-routing\"}[30s]))",
+          "legendFormat": "miss"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(duro_routing_cache_stale_total{job=\"duro-routing\"}[30s]))",
+          "legendFormat": "stale"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Записи в кеше",
+      "description": "Число записей на каждом маршрутизаторе.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "duro_routing_cache_entries{job=\"duro-routing\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Переносы и восстановления",
+      "description": "Среднее число событий в секунду за последние 30 с по всем маршрутизаторам.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(duro_routing_moves_total{job=\"duro-routing\"}[30s]))",
+          "legendFormat": "переносы"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(duro_routing_recoveries_total{job=\"duro-routing\"}[30s]))",
+          "legendFormat": "восстановления"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Время исходящего gRPC",
+      "description": "p95 длительности вызова по методу, включая ошибки. Интервал измеряет клиент gRPC в маршрутизаторе.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, method)(rate(duro_routing_rpc_seconds_bucket{job=\"duro-routing\"}[30s])))",
+          "legendFormat": "p95 {{method}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "CPU маршрутизаторов",
+      "description": "Секунды процессорного времени в секунду. Значение 1 соответствует одному ядру.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(process_cpu_seconds_total{job=\"duro-routing\"}[30s])",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "RSS маршрутизаторов",
+      "description": "Резидентная память процесса на каждом маршрутизаторе.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "duro-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "process_resident_memory_bytes{job=\"duro-routing\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    }
+  ]
+}
