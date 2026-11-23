@@ -2,6 +2,7 @@
 - [Vision](Vision.md)
 - [Технические решения MVP](Technical-Decisions.md)
 - [Архитектура MVP](Architecture-MVP.md)
+- [План разработки и RFC](Development-Plan.md)
 - [Требования](Requirements.md)
   - [Функциональные](Functional-Requirements.md)
   - [Нефункциональные](Nonfunctional-Requirements.md)

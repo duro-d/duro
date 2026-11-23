@@ -16,6 +16,8 @@ Cloudflare Durable Objects служит ориентиром объектной 
 
 V8 – общий движок, но Duro не обещает совместимость с полным API Cloudflare Workers или Durable Objects. Пакет Duro экспортирует `init` и `methods`; доступен узкий KV Storage API. [Технические решения](../Technical-Decisions.md).
 
+В MVP Duro методы и `init` работают только с состоянием своего объекта. Хранить ID других объектов можно, но межобъектные вызовы, доступ к чужому состоянию, внешние сетевые операции и транзакции над несколькими объектами не предоставляются. Сетевые операции, таймеры и взаимодействие объектов в справочных страницах Cloudflare описывают возможности Cloudflare и не задают контракт Duro. [Определение объекта Duro](../concepts/Concepts-Object.md).
+
 ## Что важно различать
 
 Cloudflare отделяет состояние в памяти от долговечного storage. Данные, которые должны пережить выгрузку экземпляра, необходимо явно сохранять. Это правило сохраняется и в Duro. [Storage API Cloudflare](https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/).
